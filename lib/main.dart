@@ -3,7 +3,8 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:just_audio/just_audio.dart';
-import 'config.dart';
+import 'config.dart'; // Updated config with async methods
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   runApp(FutechAdminApp());
@@ -38,7 +39,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> fetchUsers() async {
-    final res = await http.get(Uri.parse(AppConfig.supportUsersUrl));
+    final url = await AppConfig.supportUsersUrl;
+    final res = await http.get(Uri.parse(url));
     if (res.statusCode == 200) {
       List<dynamic> data = json.decode(res.body);
       setState(() {
@@ -47,10 +49,49 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  void _openBaseUrlDialog() async {
+    final prefs = await SharedPreferences.getInstance();
+    final currentUrl = await AppConfig.getBaseUrl();
+    TextEditingController controller = TextEditingController(text: currentUrl);
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Change Base URL'),
+        content: TextField(
+          controller: controller,
+          decoration: InputDecoration(labelText: "Base URL"),
+        ),
+        actions: [
+          TextButton(
+            child: Text("Cancel"),
+            onPressed: () => Navigator.pop(context),
+          ),
+          TextButton(
+            child: Text("Save"),
+            onPressed: () async {
+              await AppConfig.setBaseUrl(controller.text.trim());
+              Navigator.pop(context);
+              fetchUsers(); // Refresh list with new URL
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text("Futech Support Users")),
+      appBar: AppBar(
+        title: Text("Futech Support Users"),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.settings),
+            onPressed: _openBaseUrlDialog,
+          ),
+        ],
+      ),
       body: RefreshIndicator(
         onRefresh: fetchUsers,
         child: ListView.builder(
@@ -63,7 +104,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => ChatScreen(userId: userId)),
+                  MaterialPageRoute(
+                    builder: (_) => ChatScreen(userId: userId),
+                  ),
                 );
               },
             );
@@ -94,7 +137,8 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> fetchMessages() async {
-    final res = await http.get(Uri.parse(AppConfig.supportMessagesUrl(widget.userId)));
+    final url = await AppConfig.supportMessagesUrl(widget.userId);
+    final res = await http.get(Uri.parse(url));
     if (res.statusCode == 200) {
       List<dynamic> data = json.decode(res.body);
       setState(() {
@@ -104,8 +148,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> sendMessage(String text) async {
+    final url = await AppConfig.adminReplyUrl;
     final res = await http.post(
-      Uri.parse(AppConfig.adminReplyUrl),
+      Uri.parse(url),
       headers: {"Content-Type": "application/json"},
       body: json.encode({"user_id": widget.userId, "message": text}),
     );
@@ -115,31 +160,44 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<Widget> buildMessage(Map<String, dynamic> msg) async {
+  Widget buildMessage(Map<String, dynamic> msg) {
     bool isAdmin = msg['from'] == 'admin';
     String text = msg['text'];
     Widget content;
-    final baseUrl = await AppConfig.getBaseUrl();
 
     if (text.startsWith("/static/voices/")) {
       content = IconButton(
         icon: Icon(Icons.play_arrow),
         onPressed: () async {
-          await player.setUrl("$baseUrl$text");
+          final base = await AppConfig.getBaseUrl();
+          await player.setUrl("$base$text");
           player.play();
         },
       );
     } else if (text.startsWith("/static/attachments/")) {
+      final base = AppConfig.getBaseUrl();
       if (text.endsWith(".jpg") || text.endsWith(".png") || text.endsWith(".jpeg") || text.endsWith(".gif")) {
-        content = Image.network("$baseUrl$text", height: 150);
+        content = FutureBuilder<String>(
+          future: base,
+          builder: (_, snapshot) {
+            if (!snapshot.hasData) return SizedBox();
+            return Image.network("${snapshot.data}$text", height: 150);
+          },
+        );
       } else {
-        content = TextButton(
-          child: Text("📎 Download Attachment"),
-          onPressed: () async {
-            final url = "$baseUrl$text";
-            if (await canLaunch(url)) {
-              await launch(url);
-            }
+        content = FutureBuilder<String>(
+          future: base,
+          builder: (_, snapshot) {
+            if (!snapshot.hasData) return SizedBox();
+            return TextButton(
+              child: Text("📎 Download Attachment"),
+              onPressed: () async {
+                final url = "${snapshot.data}$text";
+                if (await canLaunch(url)) {
+                  await launch(url);
+                }
+              },
+            );
           },
         );
       }
@@ -170,19 +228,8 @@ class _ChatScreenState extends State<ChatScreen> {
           Expanded(
             child: RefreshIndicator(
               onRefresh: fetchMessages,
-              child: ListView.builder(
-                itemCount: messages.length,
-                itemBuilder: (context, index) {
-                  return FutureBuilder<Widget>(
-                    future: buildMessage(messages[index]),
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.done && snapshot.hasData) {
-                        return snapshot.data!;
-                      }
-                      return SizedBox.shrink();
-                    },
-                  );
-                },
+              child: ListView(
+                children: messages.map(buildMessage).toList(),
               ),
             ),
           ),
