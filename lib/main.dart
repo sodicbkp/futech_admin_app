@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:just_audio/just_audio.dart';
 import 'config.dart';
-import 'settings_screen.dart';
 
 void main() {
   runApp(FutechAdminApp());
@@ -39,8 +38,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> fetchUsers() async {
-    final url = await AppConfig.getSupportUsersUrl();
-    final res = await http.get(Uri.parse(url));
+    final res = await http.get(Uri.parse(AppConfig.supportUsersUrl));
     if (res.statusCode == 200) {
       List<dynamic> data = json.decode(res.body);
       setState(() {
@@ -52,20 +50,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text("Futech Support Users"),
-        actions: [
-          IconButton(
-            icon: Icon(Icons.settings),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => SettingsScreen()),
-              );
-            },
-          )
-        ],
-      ),
+      appBar: AppBar(title: Text("Futech Support Users")),
       body: RefreshIndicator(
         onRefresh: fetchUsers,
         child: ListView.builder(
@@ -109,8 +94,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> fetchMessages() async {
-    final url = await AppConfig.getSupportMessagesUrl(widget.userId);
-    final res = await http.get(Uri.parse(url));
+    final res = await http.get(Uri.parse(AppConfig.supportMessagesUrl(widget.userId)));
     if (res.statusCode == 200) {
       List<dynamic> data = json.decode(res.body);
       setState(() {
@@ -120,9 +104,8 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> sendMessage(String text) async {
-    final url = await AppConfig.getAdminReplyUrl();
     final res = await http.post(
-      Uri.parse(url),
+      Uri.parse(AppConfig.adminReplyUrl),
       headers: {"Content-Type": "application/json"},
       body: json.encode({"user_id": widget.userId, "message": text}),
     );
@@ -132,28 +115,30 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Widget buildMessage(Map<String, dynamic> msg) {
+  Future<Widget> buildMessage(Map<String, dynamic> msg) async {
     bool isAdmin = msg['from'] == 'admin';
     String text = msg['text'];
     Widget content;
+    final baseUrl = await AppConfig.getBaseUrl();
+
     if (text.startsWith("/static/voices/")) {
       content = IconButton(
         icon: Icon(Icons.play_arrow),
         onPressed: () async {
-          await player.setUrl("${await AppConfig.getBaseUrl()}$text");
+          await player.setUrl("$baseUrl$text");
           player.play();
         },
       );
     } else if (text.startsWith("/static/attachments/")) {
-      final fullUrl = "${await AppConfig.getBaseUrl()}$text";
       if (text.endsWith(".jpg") || text.endsWith(".png") || text.endsWith(".jpeg") || text.endsWith(".gif")) {
-        content = Image.network(fullUrl, height: 150);
+        content = Image.network("$baseUrl$text", height: 150);
       } else {
         content = TextButton(
           child: Text("📎 Download Attachment"),
           onPressed: () async {
-            if (await canLaunch(fullUrl)) {
-              await launch(fullUrl);
+            final url = "$baseUrl$text";
+            if (await canLaunch(url)) {
+              await launch(url);
             }
           },
         );
@@ -161,6 +146,7 @@ class _ChatScreenState extends State<ChatScreen> {
     } else {
       content = Text(text);
     }
+
     return Align(
       alignment: isAdmin ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
@@ -184,8 +170,19 @@ class _ChatScreenState extends State<ChatScreen> {
           Expanded(
             child: RefreshIndicator(
               onRefresh: fetchMessages,
-              child: ListView(
-                children: messages.map(buildMessage).toList(),
+              child: ListView.builder(
+                itemCount: messages.length,
+                itemBuilder: (context, index) {
+                  return FutureBuilder<Widget>(
+                    future: buildMessage(messages[index]),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.done && snapshot.hasData) {
+                        return snapshot.data!;
+                      }
+                      return SizedBox.shrink();
+                    },
+                  );
+                },
               ),
             ),
           ),
